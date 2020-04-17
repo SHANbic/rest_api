@@ -17,10 +17,11 @@ exports.getPosts = async (req, res, next) => {
       .sort({ createdAt: -1 })
       .skip((currentPage - 1) * perPage)
       .limit(perPage);
+
     res.status(200).json({
       message: 'Fetched posts successfully.',
-      posts,
-      totalItems
+      posts: posts,
+      totalItems: totalItems
     });
   } catch (err) {
     if (!err.statusCode) {
@@ -56,10 +57,13 @@ exports.createPost = async (req, res, next) => {
     const user = await User.findById(req.userId);
     user.posts.push(post);
     await user.save();
-    io.getIO().emit('posts', { action: 'create', post });
+    io.getIO().emit('posts', {
+      action: 'create',
+      post: { ...post._doc, creator: { _id: req.userId, name: user.name } }
+    });
     res.status(201).json({
       message: 'Post created successfully!',
-      post,
+      post: post,
       creator: { _id: user._id, name: user.name }
     });
   } catch (err) {
@@ -72,14 +76,14 @@ exports.createPost = async (req, res, next) => {
 
 exports.getPost = async (req, res, next) => {
   const postId = req.params.postId;
+  const post = await Post.findById(postId);
   try {
-    const post = await Post.findById(postId);
     if (!post) {
       const error = new Error('Could not find post.');
       error.statusCode = 404;
       throw error;
     }
-    res.status(200).json({ message: 'Post fetched.', post });
+    res.status(200).json({ message: 'Post fetched.', post: post });
   } catch (err) {
     if (!err.statusCode) {
       err.statusCode = 500;
@@ -108,14 +112,14 @@ exports.updatePost = async (req, res, next) => {
     throw error;
   }
   try {
-    const post = await (await Post.findById(postId)).populate('creator');
+    const post = await Post.findById(postId).populate('creator');
     if (!post) {
       const error = new Error('Could not find post.');
       error.statusCode = 404;
       throw error;
     }
     if (post.creator._id.toString() !== req.userId) {
-      const error = new Error('Not allowed');
+      const error = new Error('Not authorized!');
       error.statusCode = 403;
       throw error;
     }
@@ -125,8 +129,8 @@ exports.updatePost = async (req, res, next) => {
     post.title = title;
     post.imageUrl = imageUrl;
     post.content = content;
-    io.getIO().emit('posts', { action: 'update', post });
     const result = await post.save();
+    io.getIO().emit('posts', { action: 'update', post: result });
     res.status(200).json({ message: 'Post updated!', post: result });
   } catch (err) {
     if (!err.statusCode) {
@@ -140,22 +144,22 @@ exports.deletePost = async (req, res, next) => {
   const postId = req.params.postId;
   try {
     const post = await Post.findById(postId);
+
     if (!post) {
       const error = new Error('Could not find post.');
       error.statusCode = 404;
       throw error;
     }
-    if (post.creator._id)
-      if (post.creator.toString() !== req.userId) {
-        const error = new Error('Not allowed');
-        error.statusCode = 403;
-        throw error;
-      }
+    if (post.creator.toString() !== req.userId) {
+      const error = new Error('Not authorized!');
+      error.statusCode = 403;
+      throw error;
+    }
+    // Check logged in user
     clearImage(post.imageUrl);
     await Post.findByIdAndRemove(postId);
 
     const user = await User.findById(req.userId);
-
     user.posts.pull(postId);
     await user.save();
     io.getIO().emit('posts', { action: 'delete', post: postId });
